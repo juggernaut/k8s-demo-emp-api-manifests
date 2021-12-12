@@ -3,7 +3,6 @@ kind: Service
 metadata:
   name: k8s-emp-api-svc
 spec:
-  type: NodePort
   selector:
     app: k8s-demo-emp-api
   ports:
