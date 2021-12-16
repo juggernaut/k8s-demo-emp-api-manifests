@@ -1,13 +1,17 @@
-bases:
-  - ../base
 patchesJson6902:
-  - target:
-      group: networking.k8s.io
-      version: v1
-      kind: Ingress
-      name: ingress-to-emp-api
-    path: ingress_hostname_patch.yaml
+- path: ingress_hostname_patch.yaml
+  target:
+    group: networking.k8s.io
+    kind: Ingress
+    name: ingress-to-emp-api
+    version: v1
 patchesStrategicMerge:
-  - increase_replicas.yaml
-    
-
+- increase_replicas.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+- ../base
+images:
+- name: juggernaut/k8s-demo-emp-api
+  newName: juggernaut/k8s-demo-emp-api
+  newTag: 251ace5
