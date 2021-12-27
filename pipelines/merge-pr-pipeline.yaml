@@ -1,0 +1,123 @@
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: golang-test-write-result
+spec:
+  params:
+  - name: subdir
+    description: subdir in the workspace containing the golang source
+    default: ./
+  - name: packages
+    description: packages to test
+    default: ./...
+  results:
+  - name: go-test-result
+    description: >-
+     test result; can be either 'succeeded' or 'failed'
+  workspaces:
+  - name: source
+  steps:
+    - name: run-go-test
+      image: golang:1.17
+      onError: continue
+      workingDir: "$(workspaces.source.path)/$(params.subdir)"
+      script: go test -v $(packages)
+    - name: write-test-result
+      image: alpine
+      script: |
+        if [ `cat $(steps.step-run-go-test.exitCode.path)` = "0" ]; then
+          RESULT=success
+        else
+          RESULT=failure
+        fi
+        echo -n "$RESULT" | tee $(results.go-test-result.path)
+---
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: merge-pr-pipeline
+spec:
+  workspaces:
+    - name: merge-pr-ws
+    - name: git-ssh-creds
+  params:
+    - name: prnumber
+      description: The PR number
+    - name: prbranch
+      description: The PR branch name
+    - name: prsha
+      description: sha of the commit in the PR
+  tasks:
+    - name: set-status-pending
+      taskRef:
+        name: github-set-status
+      params:
+        - name: REPO_FULL_NAME
+          value: juggernaut/k8s-demo-emp-api
+        - name: SHA
+          value: $(params.prsha)
+        - name: TARGET_URL
+          value: http://dummy.empapi.io
+        - name: DESCRIPTION
+          value: Testing your PR
+        - name: CONTEXT
+          value: ci/tekton
+        - name: STATE
+          value: pending
+
+    - name: clone-and-merge-pr
+      taskRef:
+        name: git-cli
+      runAfter:
+        - set-status-pending
+      workspaces:
+        - name: ssh-directory
+          workspace: git-ssh-creds
+        - name: source
+          workspace: merge-pr-ws
+      params:
+        - name: BASE_IMAGE
+          value: "alpine/git:v2.32.0"
+        - name: GIT_USER_NAME
+          value: "build-bot"
+        - name: GIT_USER_EMAIL
+          value: "build-bot@empapi.io"
+        - name: GIT_SCRIPT
+          value: |
+            git clone git@github.com:juggernaut/k8s-demo-emp-api.git
+            cd k8s-demo-emp-api
+            git checkout -b merge-pr-$(params.prnumber)
+            git merge --no-ff origin/$(params.prbranch)
+
+    - name: test-emp-api
+      taskRef:
+        name: golang-test-write-result
+      runAfter:
+        - clone-and-merge-pr
+      workspaces:
+        - name: source
+          workspace: merge-pr-ws
+      params:
+        - name: subdir
+          value: k8s-demo-emp-api
+        - name: packages
+          value: ./api
+
+    - name: set-final-status
+      taskRef:
+        name: github-set-status
+      runAfter:
+        - test-emp-api
+      params:
+        - name: REPO_FULL_NAME
+          value: juggernaut/k8s-demo-emp-api
+        - name: SHA
+          value: $(params.prsha)
+        - name: TARGET_URL
+          value: http://dummy.empapi.io
+        - name: DESCRIPTION
+          value: PR test results
+        - name: CONTEXT
+          value: ci/tekton
+        - name: STATE
+          value: $(tasks.test-emp-api.results.go-test-result)

@@ -1,0 +1,85 @@
+apiVersion: triggers.tekton.dev/v1alpha1
+kind: TriggerTemplate
+metadata:
+  name: merge-pr-trigger-template
+spec:
+  params:
+    - name: prnumber
+      description: The PR number of the triggering pull request
+    - name: prbranch
+      description: The PR branch of the triggering pull request
+    - name: prsha
+      description: The commit SHA in the PR
+  resourcetemplates:
+    - apiVersion: tekton.dev/v1beta1
+      kind: PipelineRun
+      metadata:
+        generateName: merge-pr-pipeline-run-
+      spec:
+        serviceAccountName: build-bot
+        pipelineRef:
+          name: merge-pr-pipeline
+        params:
+          - name: prnumber
+            value: $(tt.params.prnumber)
+          - name: prbranch
+            value: $(tt.params.prbranch)
+          - name: prsha
+            value: $(tt.params.prsha)
+        workspaces:
+          - name: git-ssh-creds
+            secret:
+              secretName: git-ssh-creds
+          - name: merge-pr-ws # this workspace name must be declared in the Pipeline
+            volumeClaimTemplate:
+              spec:
+                accessModes:
+                  - ReadWriteOnce # access mode may affect how you can use this volume in parallel tasks
+                resources:
+                  requests:
+                    storage: 1Gi
+---
+apiVersion: triggers.tekton.dev/v1alpha1
+kind: TriggerBinding
+metadata:
+  name: merge-pr-trigger-template-binding
+spec:
+  params:
+    - name: prnumber
+      value: $(body.number)
+    - name: prbranch
+      value: $(body.pull_request.head.ref)
+    - name: prsha
+      value: $(body.pull_request.head.sha)
+---
+apiVersion: triggers.tekton.dev/v1alpha1
+kind: EventListener
+metadata:
+  name: pr-listener
+spec:
+  serviceAccountName: build-bot
+  triggers:
+    - name: github-pr-listener
+      interceptors:
+        - name: github-interceptor
+          ref:
+            name: "github"
+            kind: ClusterInterceptor
+            apiVersion: triggers.tekton.dev
+          params:
+          - name: "secretRef"
+            value:
+              secretName: github-pr-webhook-secret
+              secretKey: secretToken
+          - name: "eventTypes"
+            value: ["pull_request"]
+        - name: "CEL filter: only when PRs are opened/reopened/synchronized"
+          ref:
+            name: "cel"
+          params:
+          - name: "filter"
+            value: "body.action in ['opened', 'reopened', 'synchronize']"
+      bindings:
+      - ref: merge-pr-trigger-template-binding
+      template:
+        ref: merge-pr-trigger-template
